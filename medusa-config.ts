@@ -1,4 +1,5 @@
 import { loadEnv, defineConfig } from '@medusajs/framework/utils'
+import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
 
 loadEnv(process.env.NODE_ENV || 'development', process.cwd())
 
@@ -14,6 +15,25 @@ module.exports = defineConfig({
     },
   },
   modules: [
+    {
+      resolve: "@medusajs/medusa/auth",
+      dependencies: [Modules.CACHE, ContainerRegistrationKeys.LOGGER],
+      options: {
+        providers: [
+          {
+            resolve: "@medusajs/medusa/auth-emailpass",
+            id: "emailpass",
+          },
+          {
+            resolve: "./src/modules/external-auth",
+            id: "app-sso",
+            options: {
+              backendUrl: process.env.APP_BACKEND_URL,
+            },
+          },
+        ],
+      },
+    },
     {
       // Use the payment module package name so Medusa can resolve it
       resolve: "@medusajs/medusa/payment",
