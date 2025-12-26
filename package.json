@@ -26,6 +26,8 @@
     "@medusajs/cli": "2.12.1",
     "@medusajs/framework": "2.12.1",
     "@medusajs/medusa": "^2.12.1",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
     "razorpay": "^2.9.6"
   },
   "devDependencies": {
