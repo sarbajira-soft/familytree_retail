@@ -40,6 +40,15 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   const existingMeta: any = order.metadata || {}
 
+  if (existingMeta.shiprocket_awb_code) {
+    return res.status(400).json({
+      success: false,
+      code: "AWB_ALREADY_ASSIGNED",
+      message:
+        "Shiprocket AWB is already assigned for this order. Weight and dimensions cannot be modified after AWB assignment.",
+    })
+  }
+
   const body = (req.body || {}) as any
 
   const weightRaw = body.weight_kg

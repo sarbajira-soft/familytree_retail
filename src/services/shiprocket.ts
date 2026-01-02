@@ -228,93 +228,150 @@ export class ShiprocketService {
   }
 
   private inferPaymentMethod(order: OrderDTO): "Prepaid" | "COD" {
-    const context = (order as any).context as Record<string, any> | undefined
+  /**
+   * 1️⃣ STRONGEST SIGNAL — payment_status
+   * If Medusa says it's paid/authorized, it IS prepaid.
+   */
+  const paymentStatus = ((order as any).payment_status || "").toLowerCase()
 
-    const contextHintRaw =
-      (typeof context?.payment_type === "string" && context.payment_type) ||
-      (typeof context?.payment_mode === "string" && context.payment_mode) ||
-      (typeof context?.payment_method === "string" && context.payment_method) ||
-      undefined
+  if (
+    [
+      "captured",
+      "paid",
+      "completed",
+      "succeeded",
+      "authorized",
+      "partially_captured",
+      "partially_paid",
+    ].includes(paymentStatus)
+  ) {
+    return "Prepaid"
+  }
 
-    if (contextHintRaw) {
-      const lower = contextHintRaw.toLowerCase()
+  /**
+   * 2️⃣ CONTEXT HINTS (checkout metadata)
+   */
+  const context = (order as any).context as Record<string, any> | undefined
 
-      if (
-        lower.includes("cod") ||
-        lower.includes("cash_on_delivery") ||
-        lower.includes("cash-on-delivery")
-      ) {
-        return "COD"
-      }
+  const contextHintRaw =
+    (typeof context?.payment_type === "string" && context.payment_type) ||
+    (typeof context?.payment_mode === "string" && context.payment_mode) ||
+    (typeof context?.payment_method === "string" && context.payment_method) ||
+    undefined
 
-      if (
-        lower.includes("online") ||
+  if (contextHintRaw) {
+    const lower = contextHintRaw.toLowerCase()
+
+    if (
+      lower.includes("cod") ||
+      lower.includes("cash_on_delivery") ||
+      lower.includes("cash-on-delivery")
+    ) {
+      return "COD"
+    }
+
+    if (
+      lower.includes("razorpay") ||
+      lower.includes("online") ||
+      lower.includes("prepaid") ||
+      lower.includes("card") ||
+      lower.includes("upi")
+    ) {
+      return "Prepaid"
+    }
+  }
+
+  /**
+   * 3️⃣ MEDUSA v2 — transactions (MOST RELIABLE after payment_status)
+   */
+  const transactions = (order as any).transactions as any[] | undefined
+
+  if (Array.isArray(transactions) && transactions.length > 0) {
+    const hasPaidTransaction = transactions.some((tx) => {
+      const status = (tx.status || "").toLowerCase()
+      return [
+        "captured",
+        "paid",
+        "succeeded",
+        "authorized",
+        "partially_captured",
+        "partially_paid",
+      ].includes(status)
+    })
+
+    if (hasPaidTransaction) {
+      return "Prepaid"
+    }
+  }
+
+  /**
+   * 4️⃣ LEGACY / v1 SUPPORT — payments (optional safety net)
+   */
+  const payments: any[] = []
+
+  const paymentCollections = ((order as any).payment_collections || []) as Array<
+    { payments?: any[] } | undefined
+  >
+
+  for (const pc of paymentCollections) {
+    if (pc?.payments && Array.isArray(pc.payments)) {
+      payments.push(...pc.payments)
+    }
+  }
+
+  const legacyPayments = (order as any).payments as any[] | undefined
+  if (Array.isArray(legacyPayments) && legacyPayments.length > 0) {
+    payments.push(...legacyPayments)
+  }
+
+  if (payments.length > 0) {
+    const hasOnlineProvider = payments.some((p) => {
+      const provider = (p as any).provider_id as string | undefined
+      if (!provider) return false
+
+      const lower = provider.toLowerCase()
+      return (
         lower.includes("razorpay") ||
-        lower.includes("prepaid") ||
+        lower.includes("stripe") ||
+        lower.includes("online") ||
         lower.includes("card") ||
         lower.includes("upi")
-      ) {
-        return "Prepaid"
-      }
+      )
+    })
+
+    if (hasOnlineProvider) {
+      return "Prepaid"
     }
 
-    const payments = (order as any).payments as any[] | undefined
+    const hasCaptured = payments.some((p) => {
+      const status = ((p as any).status || "").toLowerCase()
+      return (
+        (p as any).captured_at ||
+        [
+          "captured",
+          "succeeded",
+          "completed",
+          "paid",
+          "authorized",
+          "partially_captured",
+          "partially_paid",
+        ].includes(status)
+      )
+    })
 
-    if (Array.isArray(payments) && payments.length > 0) {
-      const hasOnlineProvider = payments.some((p) => {
-        const provider = (p as any).provider_id as string | undefined
-        if (!provider) return false
-        const lower = provider.toLowerCase()
-        return (
-          lower.includes("razorpay") ||
-          lower.includes("stripe") ||
-          lower.includes("online") ||
-          lower.includes("card") ||
-          lower.includes("upi")
-        )
-      })
-
-      if (hasOnlineProvider) {
-        return "Prepaid"
-      }
-
-      const hasCaptured = payments.some((p) => {
-        const statusRaw = (p as any).status as string | undefined
-        const status = statusRaw ? statusRaw.toLowerCase() : ""
-        return (
-          (p as any).captured_at ||
-          status === "captured" ||
-          status === "succeeded" ||
-          status === "completed" ||
-          status === "paid"
-        )
-      })
-
-      if (hasCaptured) {
-        return "Prepaid"
-      }
+    if (hasCaptured) {
+      return "Prepaid"
     }
-
-    const paymentStatusRaw = (order as any).payment_status as string | undefined
-    if (paymentStatusRaw) {
-      const paymentStatus = paymentStatusRaw.toLowerCase()
-      if (
-        paymentStatus === "captured" ||
-        paymentStatus === "paid" ||
-        paymentStatus === "completed" ||
-        paymentStatus === "succeeded"
-      ) {
-        return "Prepaid"
-      }
-    }
-
-    // At this point we do not have a clear Prepaid signal from context,
-    // payments, or payment_status. For typical Medusa setups where
-    // prepaid orders go through an online provider (e.g. Razorpay) and
-    // COD orders use the system default/offline provider, it is safer to
-    // treat the remaining ambiguous cases as COD.
-    return "COD"
   }
+
+  /**
+   * 5️⃣ FINAL FALLBACK
+   * If nothing clearly indicates COD, treat as Prepaid.
+   * This avoids misclassifying online payments as COD in Shiprocket.
+   */
+  return "Prepaid"
+}
+
 
   /**
    * Create a Shiprocket order + shipment from a Medusa OrderDTO.
@@ -366,6 +423,7 @@ export class ShiprocketService {
     }
 
     const paymentMethod = this.inferPaymentMethod(order)
+    const isPrepaid = paymentMethod === "Prepaid"
 
     const defaultLength = Number(process.env.SHIPROCKET_DEFAULT_LENGTH || 10)
     const defaultBreadth = Number(process.env.SHIPROCKET_DEFAULT_BREADTH || 10)
@@ -418,7 +476,7 @@ export class ShiprocketService {
       pickup_postcode: pickupPostcode,
       delivery_postcode: shipping.postal_code,
       weight: totalWeight,
-      cod: paymentMethod === "COD" ? 1 : 0,
+      cod: isPrepaid ? 0 : 1,
       length,
       breadth,
       height,
@@ -477,6 +535,15 @@ export class ShiprocketService {
     )
     const shippingCountry = this.mapCountryForShiprocket(shipping.country_code)
 
+    const subTotal =
+      itemsTotal + shippingCharges - totalDiscount > 0
+        ? itemsTotal + shippingCharges - totalDiscount
+        : itemsTotal > 0
+        ? itemsTotal
+        : 1
+
+    const collectableAmount = isPrepaid ? 0 : subTotal
+
     const payload: any = {
       // Use Medusa order ID so we can reliably map Shiprocket webhooks back.
       order_id: order.id,
@@ -506,21 +573,23 @@ export class ShiprocketService {
       shipping_phone: shipping.phone,
       order_items: lineItems,
       payment_method: paymentMethod,
+      collectable_amount: collectableAmount,
       shipping_charges: shippingCharges,
       giftwrap_charges: 0,
       transaction_charges: 0,
       total_discount: totalDiscount,
-      sub_total:
-        itemsTotal + shippingCharges - totalDiscount > 0
-          ? itemsTotal + shippingCharges - totalDiscount
-          : itemsTotal > 0
-          ? itemsTotal
-          : 1,
+      sub_total: subTotal,
       length,
       breadth,
       height,
       weight: totalWeight,
     }
+
+    this.logger.info?.(
+      `Shiprocket payment mapping for order ${order.id}: payment_status=${String(
+        (order as any).payment_status || "n/a"
+      )}, inferred=${paymentMethod}, is_prepaid=${isPrepaid}, collectable_amount=${collectableAmount}`
+    )
 
     try {
       const { data: orderRes } = await this.withRetry(
@@ -631,6 +700,49 @@ export class ShiprocketService {
       const errPayload = e?.response?.data || e
       this.logger.error?.("Shiprocket AWB assignment failed", errPayload)
       return {
+        error_code: "SHIPROCKET_API_ERROR",
+        error_message:
+          typeof errPayload === "string"
+            ? errPayload
+            : JSON.stringify(errPayload),
+      }
+    }
+  }
+
+  async schedulePickup(
+    shipmentIds: number[]
+  ): Promise<{
+    success: boolean
+    error_code?: string
+    error_message?: string
+  } | null> {
+    if (!shipmentIds.length) {
+      return {
+        success: false,
+        error_code: "NO_SHIPMENT_IDS",
+        error_message: "No shipment ids provided for pickup generation",
+      }
+    }
+
+    const client = await this.getClient()
+
+    try {
+      await this.withRetry(
+        () =>
+          client.post("/v1/external/courier/generate/pickup", {
+            shipment_id: shipmentIds,
+          }),
+        "generate-pickup"
+      )
+
+      return {
+        success: true,
+      }
+    } catch (e: any) {
+      const errPayload = e?.response?.data || e
+      this.logger.error?.("Shiprocket pickup generation failed", errPayload)
+      return {
+        success: false,
         error_code: "SHIPROCKET_API_ERROR",
         error_message:
           typeof errPayload === "string"

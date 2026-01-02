@@ -104,6 +104,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     newMetadata.shiprocket_awb_status = "assigned"
     newMetadata.shiprocket_error_code = null
     newMetadata.shiprocket_error_message = null
+    newMetadata.shiprocket_tracking_url = `https://track.shiprocket.in/${awb_code}`
   } else {
     newMetadata.shiprocket_awb_status = "pending"
     newMetadata.shiprocket_error_code = error_code || "AWB_ASSIGN_FAILED"
@@ -120,7 +121,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     try {
       const fulfillments = await fulfillmentModuleService.listFulfillments({
         order_id: [order.id],
-      })
+      } as any)
 
       if (Array.isArray(fulfillments) && fulfillments.length) {
         const fulfillment = fulfillments[0] as any

@@ -15,13 +15,36 @@ export default async function shiprocketAwbOnShipped({
 
   const raw: any = data as any
 
-  const orderId: string | undefined = raw?.order_id as string | undefined
-  const fulfillmentId: string | undefined = raw?.fulfillment_id as string | undefined
+  const fulfillmentId: string | undefined =
+    (raw?.fulfillment_id as string | undefined) ||
+    (raw?.id as string | undefined)
 
-  if (!orderId || !fulfillmentId) {
+  if (!fulfillmentId) {
     const keys = raw && typeof raw === "object" ? Object.keys(raw) : []
     logger.warn(
-      `Shiprocket: order.fulfillment_created event missing order_id or fulfillment_id (payload keys: ${keys.join(",")})`
+      `Shiprocket: order.fulfillment_created event missing fulfillment id (payload keys: ${keys.join(",")})`
+    )
+    return
+  }
+
+  let fulfillment: any
+  try {
+    fulfillment = await fulfillmentService.retrieveFulfillment(fulfillmentId)
+  } catch (e: any) {
+    logger.warn(
+      `Shiprocket: failed to retrieve fulfillment ${fulfillmentId}: ${
+        e?.message || "unknown error"
+      }`
+    )
+    return
+  }
+
+  const orderId: string | undefined =
+    (fulfillment as any).order_id || (fulfillment as any).order?.id
+
+  if (!orderId) {
+    logger.warn(
+      `Shiprocket: fulfillment ${fulfillmentId} has no associated order_id`
     )
     return
   }
@@ -44,9 +67,49 @@ export default async function shiprocketAwbOnShipped({
   }
 
   if (meta.shiprocket_awb_code) {
-    logger.info(
-      `Shiprocket: AWB already assigned for order ${order.id}, skipping`
-    )
+    const awbCode = String(meta.shiprocket_awb_code)
+    const courierName =
+      (typeof meta.shiprocket_courier_name === "string" &&
+        meta.shiprocket_courier_name) || null
+    const trackingUrl: string =
+      (typeof meta.shiprocket_tracking_url === "string" &&
+        meta.shiprocket_tracking_url) ||
+      `https://track.shiprocket.in/${awbCode}`
+
+    try {
+      const existingFulfillmentMeta = (fulfillment as any)?.metadata || {}
+
+      await fulfillmentService.updateFulfillment(
+        fulfillmentId,
+        {
+          tracking_links: [
+            {
+              tracking_number: awbCode,
+              url: trackingUrl,
+              metadata: {
+                provider: "shiprocket",
+                courier: courierName,
+              },
+            },
+          ],
+          metadata: {
+            ...existingFulfillmentMeta,
+            shiprocket_awb_code: awbCode,
+            shiprocket_courier_name: courierName,
+            shiprocket_tracking_url: trackingUrl,
+          },
+        } as any
+      )
+
+      logger.info(
+        `Shiprocket: AWB ${awbCode} already existed for order ${order.id}, attached tracking to fulfillment ${fulfillmentId}`
+      )
+    } catch (e: any) {
+      logger.warn(
+        `Shiprocket: failed to attach existing AWB ${awbCode} to fulfillment ${fulfillmentId} for order ${order.id}: ${e?.message || "unknown error"}`
+      )
+    }
+
     return
   }
 
@@ -54,7 +117,7 @@ export default async function shiprocketAwbOnShipped({
    * 4. Retrieve the target fulfillment to attach AWB to
    *    (we already have fulfillment_id from the event payload)
    */
-  const targetFulfillment = await fulfillmentService.retrieveFulfillment(fulfillmentId)
+  const targetFulfillment = fulfillment
 
   /**
    * 5. Assign AWB
@@ -75,6 +138,9 @@ export default async function shiprocketAwbOnShipped({
   const { awb_code, courier_name, error_code, error_message } = awbResult as any
 
   let labelUrl: string | undefined
+  let pickupScheduled = false
+  let pickupErrorCode: string | null = null
+  let pickupErrorMessage: string | null = null
 
   if (awb_code && !error_code) {
     try {
@@ -94,11 +160,41 @@ export default async function shiprocketAwbOnShipped({
         `Shiprocket: exception during label generation for order ${order.id}: ${e?.message || "unknown error"}`
       )
     }
+
+    try {
+      const pickupResult = await shiprocket.schedulePickup([
+        (meta as any).shiprocket_shipment_id as number,
+      ])
+
+      if (pickupResult?.success) {
+        pickupScheduled = true
+      } else if (pickupResult && !pickupResult.success) {
+        pickupErrorCode = pickupResult.error_code || "PICKUP_FAILED"
+        pickupErrorMessage =
+          pickupResult.error_message || "Shiprocket pickup scheduling failed"
+      }
+    } catch (e: any) {
+      logger.warn(
+        `Shiprocket: exception during pickup scheduling for order ${order.id}: ${e?.message || "unknown error"}`
+      )
+    }
   }
 
   /**
    * 6. Save result (IMPORTANT: save even if AWB fails)
    */
+  const pickupMeta: any = {}
+
+  if (pickupScheduled) {
+    pickupMeta.shiprocket_pickup_scheduled = true
+    pickupMeta.shiprocket_pickup_error_code = null
+    pickupMeta.shiprocket_pickup_error_message = null
+  } else if (pickupErrorCode) {
+    pickupMeta.shiprocket_pickup_scheduled = false
+    pickupMeta.shiprocket_pickup_error_code = pickupErrorCode
+    pickupMeta.shiprocket_pickup_error_message = pickupErrorMessage
+  }
+
   await orderService.updateOrders(order.id, {
     metadata: {
       ...meta,
@@ -112,6 +208,12 @@ export default async function shiprocketAwbOnShipped({
             shiprocket_label_url: labelUrl,
           }
         : {}),
+      ...(awb_code
+        ? {
+            shiprocket_tracking_url: `https://track.shiprocket.in/${awb_code}`,
+          }
+        : {}),
+      ...pickupMeta,
     },
   })
 
