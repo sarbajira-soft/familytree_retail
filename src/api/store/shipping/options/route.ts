@@ -125,7 +125,9 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       relations: ["items", "shipping_address"],
     })
   } catch (e: any) {
-    logger.warn?.("Shiprocket shipping options: failed to retrieve cart", e)
+    logger.warn?.(
+      `Shiprocket shipping options: failed to retrieve cart: ${e?.message || e}`
+    )
     return res.status(404).json({
       serviceable: false,
       error: "Cart not found",

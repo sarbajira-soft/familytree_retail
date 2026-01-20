@@ -123,7 +123,6 @@ class AppSsoAuthProviderService extends AbstractAuthModuleProvider {
       } catch {
         authIdentity = await authIdentityProviderService.create({
           entity_id: email,
-          provider: this.provider,
           user_metadata: {
             email,
             first_name: resolvedFirstName,
@@ -144,7 +143,7 @@ class AppSsoAuthProviderService extends AbstractAuthModuleProvider {
         authIdentity,
       }
     } catch (e: any) {
-      this.logger_?.warn?.("App SSO authenticate failed", e)
+      this.logger_?.warn?.(`App SSO authenticate failed: ${e?.message || e }`)
       return {
         success: false,
         error: e?.message || "Authentication failed",
