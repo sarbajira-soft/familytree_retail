@@ -1,7 +1,7 @@
-import { loadEnv, defineConfig } from '@medusajs/framework/utils'
+import { loadEnv, defineConfig } from "@medusajs/framework/utils"
 import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
 
-loadEnv(process.env.NODE_ENV || 'development', process.cwd())
+loadEnv(process.env.NODE_ENV || "production", process.cwd())
 
 module.exports = defineConfig({
   projectConfig: {
@@ -10,11 +10,33 @@ module.exports = defineConfig({
       storeCors: process.env.STORE_CORS!,
       adminCors: process.env.ADMIN_CORS!,
       authCors: process.env.AUTH_CORS!,
-      jwtSecret: process.env.JWT_SECRET || "supersecret",
-      cookieSecret: process.env.COOKIE_SECRET || "supersecret",
+      jwtSecret: process.env.JWT_SECRET!,
+      cookieSecret: process.env.COOKIE_SECRET!,
     },
   },
+
   modules: [
+    {
+      resolve: "@medusajs/file",
+      options: {
+        providers: [
+          {
+            resolve: "./src/modules/file-s3-no-acl",
+            id: "s3-no-acl",
+            options: {
+              bucket: process.env.S3_BUCKET,
+              region: process.env.S3_REGION,
+              access_key_id: process.env.S3_ACCESS_KEY,
+              secret_access_key: process.env.S3_SECRET_KEY,
+              prefix: process.env.RETAIL_PRODUCT_PATH || "products/",
+              cache_control: "public, max-age=31536000",
+            },
+          },
+        ],
+      },
+    },
+
+    // AUTH
     {
       resolve: "@medusajs/medusa/auth",
       dependencies: [Modules.CACHE, ContainerRegistrationKeys.LOGGER],
@@ -34,8 +56,9 @@ module.exports = defineConfig({
         ],
       },
     },
+
+    // PAYMENT
     {
-      // Use the payment module package name so Medusa can resolve it
       resolve: "@medusajs/medusa/payment",
       options: {
         providers: [
