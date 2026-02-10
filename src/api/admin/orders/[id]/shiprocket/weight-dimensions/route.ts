@@ -100,8 +100,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     metadata: newMetadata,
   })
 
+  const persisted = await orderModuleService.retrieveOrder(order.id)
+  const persistedMeta: any = (persisted as any)?.metadata || {}
+
   return res.json({
     success: true,
-    metadata: newMetadata,
+    metadata: persistedMeta,
   })
 }

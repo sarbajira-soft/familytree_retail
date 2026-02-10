@@ -57,6 +57,25 @@ module.exports = defineConfig({
       },
     },
 
+    // FULFILLMENT
+    {
+      resolve: "@medusajs/medusa/fulfillment",
+      options: {
+        providers: [
+          {
+            resolve: "@medusajs/medusa/fulfillment-manual",
+            id: "manual",
+            options: {},
+          },
+          {
+            resolve: "./src/modules/shiprocket",
+            id: "shiprocket",
+            options: {},
+          },
+        ],
+      },
+    },
+
     // PAYMENT
     {
       resolve: "@medusajs/medusa/payment",

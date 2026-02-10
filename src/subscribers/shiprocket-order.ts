@@ -73,9 +73,34 @@ export default async function shiprocketShipmentHandler({
     return
   }
 
-  const order = await orderModuleService.retrieveOrder(orderId, {
-    relations: ["billing_address", "shipping_address", "items"],
-  })
+  let order: any
+  try {
+    order = await orderModuleService.retrieveOrder(orderId, {
+      relations: [
+        "billing_address",
+        "shipping_address",
+        "items",
+        "items.variant",
+        "shipping_methods",
+      ],
+    })
+  } catch (e: any) {
+    logger.warn?.(
+      `Shiprocket subscriber: failed to retrieve order ${orderId} with relations (${e?.message || "unknown error"})`
+    )
+
+    try {
+      order = await orderModuleService.retrieveOrder(orderId, {
+        relations: ["billing_address", "shipping_address", "items", "shipping_methods"],
+      })
+    } catch (e2: any) {
+      logger.warn?.(
+        `Shiprocket subscriber: failed to retrieve order ${orderId} with minimal relations (${e2?.message || "unknown error"})`
+      )
+
+      order = await orderModuleService.retrieveOrder(orderId)
+    }
+  }
 
   const existingMeta: any = order.metadata || {}
 

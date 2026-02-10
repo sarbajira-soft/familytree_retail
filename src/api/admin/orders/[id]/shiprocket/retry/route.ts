@@ -33,7 +33,13 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
   try {
     order = await orderModuleService.retrieveOrder(id, {
-      relations: ["billing_address", "shipping_address", "items"],
+      relations: [
+        "billing_address",
+        "shipping_address",
+        "items",
+        "items.variant",
+        "shipping_methods",
+      ],
     })
   } catch (e: any) {
     logger.warn?.(

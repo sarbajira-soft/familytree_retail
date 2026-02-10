@@ -17,12 +17,32 @@ function normalizeShiprocketStatus(raw: string | number | null | undefined): str
 
   // Handle known numeric status codes from Shiprocket tracking
   if (/^\d+$/.test(value)) {
-    // 42 is used by Shiprocket for "PICKED UP"
-    if (value === "42") {
-      return "picked_up"
+    // Common Shiprocket numeric shipment status codes.
+    // Important ones (based on Shiprocket tracking payloads):
+    // - 7: DELIVERED
+    // - 17: OUT FOR DELIVERY
+    // - 18: IN TRANSIT
+    // - 19: OUT FOR PICKUP
+    // - 21: UNDELIVERED
+    // - 38: REACHED AT DESTINATION HUB
+    // - 42: PICKED UP
+    switch (value) {
+      case "7":
+        return "delivered"
+      case "17":
+        return "out_for_delivery"
+      case "18":
+      case "38":
+        return "in_transit"
+      case "19":
+        return "pickup_scheduled"
+      case "21":
+        return "undelivered"
+      case "42":
+        return "picked_up"
+      default:
+        return "unknown"
     }
-
-    return "unknown"
   }
 
   // Explicitly treat phrases like "picked up" / "pickup done" as picked_up
@@ -37,6 +57,14 @@ function normalizeShiprocketStatus(raw: string | number | null | undefined): str
 
   if (value.includes("transit") || value.includes("shipped")) {
     return "in_transit"
+  }
+
+  if (value.includes("out for delivery") || value.includes("ofd")) {
+    return "out_for_delivery"
+  }
+
+  if (value.includes("undelivered") || value.includes("un-delivered")) {
+    return "undelivered"
   }
 
   if (value.includes("delivered")) {

@@ -126,6 +126,10 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
         receipt: sessionId || (context as any)?.resource_id,
         payment_capture: 1, // auto-capture on successful payment
         notes: {
+          // IMPORTANT: store the Medusa payment session id so webhooks can map back
+          // to the correct payment session.
+          payment_session_id: sessionId,
+          // Backward compatibility with older payloads.
           session_id: sessionId,
         },
       })
@@ -178,9 +182,14 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
         ? paymentsResponse.items
         : []
 
+      // Razorpay payment status can be "authorized" (not yet captured)
+      // or "captured" when payment_capture=1 or when captured later.
+      // Prefer captured if available, otherwise accept authorized.
       const capturedPayment = items.find((p: any) => p.status === "captured")
+      const authorizedPayment = items.find((p: any) => p.status === "authorized")
+      const successfulPayment = capturedPayment || authorizedPayment
 
-      if (!capturedPayment) {
+      if (!successfulPayment) {
         // No captured payment yet; leave session pending so that
         // webhooks can still move it to SUCCESSFUL when they arrive.
         return {
@@ -192,17 +201,19 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
         }
       }
 
-      const amountMinor = (capturedPayment.amount as number) || 0
+      const razorpayStatus = (successfulPayment.status as string) || ""
 
       return {
         data: {
           ...data,
           razorpay_order_id: orderId,
-          razorpay_payment_id: capturedPayment.id,
-          latest_status: capturedPayment.status,
+          razorpay_payment_id: successfulPayment.id,
+          latest_status: razorpayStatus,
         },
-        // Treat auto-captured Razorpay payments as fully captured inside Medusa.
-        status: PaymentSessionStatus.CAPTURED,
+        status:
+          razorpayStatus === "captured"
+            ? PaymentSessionStatus.CAPTURED
+            : PaymentSessionStatus.AUTHORIZED,
       }
     } catch (e: any) {
       this.logger_?.error?.("Razorpay authorizePayment verification failed", e)
@@ -392,7 +403,10 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
     const paymentEntity = body?.payload?.payment?.entity
     const amountMinor = (paymentEntity?.amount as number) || 0
     const sessionId =
-      paymentEntity?.notes?.session_id || (paymentEntity?.order_id as string) || ""
+      paymentEntity?.notes?.payment_session_id ||
+      paymentEntity?.notes?.session_id ||
+      (paymentEntity?.order_id as string) ||
+      ""
 
     const bigAmount = new BigNumber(amountMinor)
 

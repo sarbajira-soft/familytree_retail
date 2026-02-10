@@ -53,6 +53,11 @@ export class ShiprocketService {
   private logger: Logger
   private tokenManager: ShiprocketTokenManager
 
+  private static serviceabilityCache = new Map<
+    string,
+    { ts: number; value: ShiprocketServiceabilityResponse | null }
+  >()
+
   constructor(logger: Logger) {
     this.logger = logger
     this.tokenManager = ShiprocketTokenManager.getInstance()
@@ -143,6 +148,30 @@ export class ShiprocketService {
         : 0
     params.cod = codFlag
 
+    const cacheKey = JSON.stringify({
+      pickup_postcode: params.pickup_postcode,
+      delivery_postcode: params.delivery_postcode,
+      weight: params.weight,
+      cod: params.cod,
+      length: args.length,
+      breadth: args.breadth,
+      height: args.height,
+      declared_value: args.declared_value,
+      mode: args.mode,
+      is_return: args.is_return,
+      couriers_type: args.couriers_type,
+      only_local: args.only_local,
+      qc_check: args.qc_check,
+    })
+
+    const now = Date.now()
+    const cached = ShiprocketService.serviceabilityCache.get(cacheKey)
+    const CACHE_TTL_MS = 30_000
+
+    if (cached && now - cached.ts < CACHE_TTL_MS) {
+      return cached.value
+    }
+
     if (typeof args.length === "number") params.length = args.length
     if (typeof args.breadth === "number") params.breadth = args.breadth
     if (typeof args.height === "number") params.height = args.height
@@ -189,6 +218,25 @@ export class ShiprocketService {
         courier_company: Array.isArray(companies) ? companies : [],
       }
 
+      // Debug log: what Shiprocket actually returned for this
+      // serviceability check. This helps us understand why
+      // standard/express aggregation may result in identical
+      // prices/ETAs.
+      this.logger.info?.(
+        "Shiprocket serviceability: normalized response " +
+          JSON.stringify({
+            params,
+            status: normalized.status,
+            courier_count: normalized.courier_company.length,
+            courier_company: normalized.courier_company,
+          })
+      )
+
+      ShiprocketService.serviceabilityCache.set(cacheKey, {
+        ts: Date.now(),
+        value: normalized,
+      })
+
       return normalized
     } catch (e: any) {
       this.logger.error?.("Shiprocket serviceability check failed", e)
@@ -232,25 +280,43 @@ export class ShiprocketService {
    * 1️⃣ STRONGEST SIGNAL — payment_status
    * If Medusa says it's paid/authorized, it IS prepaid.
    */
-  const paymentStatus = ((order as any).payment_status || "").toLowerCase()
+  const shippingMethods = (order as any).shipping_methods as any[] | undefined
 
-  if (
-    [
-      "captured",
-      "paid",
-      "completed",
-      "succeeded",
-      "authorized",
-      "partially_captured",
-      "partially_paid",
-    ].includes(paymentStatus)
-  ) {
-    return "Prepaid"
+  if (Array.isArray(shippingMethods) && shippingMethods.length > 0) {
+    for (const sm of shippingMethods) {
+      const data = (sm as any).data as Record<string, any> | undefined
+      if (!data) continue
+
+      const shippingHintRaw =
+        (typeof data.payment_type === "string" && data.payment_type) ||
+        (typeof data.payment_mode === "string" && data.payment_mode) ||
+        (typeof data.payment_method === "string" && data.payment_method) ||
+        undefined
+
+      if (!shippingHintRaw) continue
+
+      const lower = shippingHintRaw.toLowerCase()
+
+      if (
+        lower.includes("cod") ||
+        lower.includes("cash_on_delivery") ||
+        lower.includes("cash-on-delivery")
+      ) {
+        return "COD"
+      }
+
+      if (
+        lower.includes("razorpay") ||
+        lower.includes("online") ||
+        lower.includes("prepaid") ||
+        lower.includes("card") ||
+        lower.includes("upi")
+      ) {
+        return "Prepaid"
+      }
+    }
   }
 
-  /**
-   * 2️⃣ CONTEXT HINTS (checkout metadata)
-   */
   const context = (order as any).context as Record<string, any> | undefined
 
   const contextHintRaw =
@@ -281,6 +347,21 @@ export class ShiprocketService {
     }
   }
 
+  const paymentStatus = ((order as any).payment_status || "").toLowerCase()
+
+  if (
+    [
+      "captured",
+      "paid",
+      "completed",
+      "succeeded",
+      "partially_captured",
+      "partially_paid",
+    ].includes(paymentStatus)
+  ) {
+    return "Prepaid"
+  }
+
   /**
    * 3️⃣ MEDUSA v2 — transactions (MOST RELIABLE after payment_status)
    */
@@ -293,7 +374,7 @@ export class ShiprocketService {
         "captured",
         "paid",
         "succeeded",
-        "authorized",
+        "completed",
         "partially_captured",
         "partially_paid",
       ].includes(status)
@@ -352,7 +433,6 @@ export class ShiprocketService {
           "succeeded",
           "completed",
           "paid",
-          "authorized",
           "partially_captured",
           "partially_paid",
         ].includes(status)
@@ -362,6 +442,8 @@ export class ShiprocketService {
     if (hasCaptured) {
       return "Prepaid"
     }
+
+    return "COD"
   }
 
   /**
@@ -425,13 +507,7 @@ export class ShiprocketService {
     const paymentMethod = this.inferPaymentMethod(order)
     const isPrepaid = paymentMethod === "Prepaid"
 
-    const defaultLength = Number(process.env.SHIPROCKET_DEFAULT_LENGTH || 10)
-    const defaultBreadth = Number(process.env.SHIPROCKET_DEFAULT_BREADTH || 10)
-    const defaultHeight = Number(process.env.SHIPROCKET_DEFAULT_HEIGHT || 10)
-
-    let length = defaultLength
-    let breadth = defaultBreadth
-    let height = defaultHeight
+    let { length, breadth, height } = this.estimateOrderDimensions(order)
 
     const lengthOverrideRaw = meta?.shiprocket_length_cm
     if (lengthOverrideRaw !== undefined && lengthOverrideRaw !== null) {
@@ -535,14 +611,18 @@ export class ShiprocketService {
     )
     const shippingCountry = this.mapCountryForShiprocket(shipping.country_code)
 
-    const subTotal =
+    const subTotal = itemsTotal - totalDiscount > 0
+      ? itemsTotal - totalDiscount
+      : itemsTotal > 0
+      ? itemsTotal
+      : 1
+
+    const payableAmount =
       itemsTotal + shippingCharges - totalDiscount > 0
         ? itemsTotal + shippingCharges - totalDiscount
-        : itemsTotal > 0
-        ? itemsTotal
-        : 1
+        : subTotal
 
-    const collectableAmount = isPrepaid ? 0 : subTotal
+    const collectableAmount = isPrepaid ? 0 : payableAmount
 
     const payload: any = {
       // Use Medusa order ID so we can reliably map Shiprocket webhooks back.
@@ -634,8 +714,8 @@ export class ShiprocketService {
 
   /**
    * Approximate weight in kg for the order.
-   * If item weight metadata exists, sum it, otherwise fall back to a
-   * configured default.
+   * If item weight metadata exists, sum it, otherwise fall back to product/variant
+   * weight (in grams) or a configured default.
    */
   private estimateOrderWeight(order: OrderDTO): number {
     const defaultWeight = Number(process.env.SHIPROCKET_DEFAULT_WEIGHT_KG || 0.5)
@@ -643,12 +723,126 @@ export class ShiprocketService {
     let total = 0
 
     for (const item of order.items || []) {
-      const weightMeta = (item.metadata as any)?.weight_kg
-      const perUnit = weightMeta ? Number(weightMeta) : defaultWeight
-      total += perUnit * item.quantity
+      const qty =
+        typeof item.quantity === "number" && item.quantity > 0 ? item.quantity : 1
+
+      let perUnit = 0
+
+      const meta = (item as any).metadata as Record<string, any> | undefined
+      const metaWeight = meta?.weight_kg
+      if (metaWeight !== undefined && metaWeight !== null && metaWeight !== "") {
+        const parsed = Number(metaWeight)
+        if (Number.isFinite(parsed) && parsed > 0) {
+          perUnit = parsed
+        }
+      }
+
+      if (!perUnit) {
+        const variant = (item as any).variant as any | undefined
+        const product = (variant as any)?.product || (item as any).product
+
+        const variantWeightRaw = (variant as any)?.weight
+        const productWeightRaw = product?.weight
+
+        const variantWeightNum =
+          typeof variantWeightRaw === "number"
+            ? variantWeightRaw
+            : Number(variantWeightRaw)
+        const productWeightNum =
+          typeof productWeightRaw === "number"
+            ? productWeightRaw
+            : Number(productWeightRaw)
+
+        const grams =
+          variantWeightNum && Number.isFinite(variantWeightNum) && variantWeightNum > 0
+            ? variantWeightNum
+            : productWeightNum &&
+              Number.isFinite(productWeightNum) &&
+              productWeightNum > 0
+            ? productWeightNum
+            : 0
+
+        if (grams > 0) {
+          perUnit = grams / 1000
+        }
+      }
+
+      if (!perUnit || !Number.isFinite(perUnit) || perUnit <= 0) {
+        perUnit = defaultWeight
+      }
+
+      total += perUnit * qty
     }
 
     return total || defaultWeight
+  }
+
+  private estimateOrderDimensions(order: OrderDTO): {
+    length: number
+    breadth: number
+    height: number
+  } {
+    const defaultLength = Number(process.env.SHIPROCKET_DEFAULT_LENGTH || 10)
+    const defaultBreadth = Number(process.env.SHIPROCKET_DEFAULT_BREADTH || 10)
+    const defaultHeight = Number(process.env.SHIPROCKET_DEFAULT_HEIGHT || 10)
+
+    let maxLength = 0
+    let maxBreadth = 0
+    let maxHeight = 0
+
+    const parse = (value: any): number => {
+      const num = typeof value === "number" ? value : Number(value)
+      return Number.isFinite(num) && num > 0 ? num : 0
+    }
+
+    for (const item of order.items || []) {
+      const meta = (item as any).metadata as Record<string, any> | undefined
+      const variant = (item as any).variant as any | undefined
+      const product = (variant as any)?.product || (item as any).product
+
+      const lengthCandidates = [
+        meta?.length_cm,
+        (variant as any)?.length,
+        (product as any)?.length,
+      ]
+      const widthCandidates = [
+        meta?.breadth_cm,
+        (variant as any)?.width,
+        (product as any)?.width,
+      ]
+      const heightCandidates = [
+        meta?.height_cm,
+        (variant as any)?.height,
+        (product as any)?.height,
+      ]
+
+      for (const candidate of lengthCandidates) {
+        const n = parse(candidate)
+        if (n > maxLength) {
+          maxLength = n
+        }
+      }
+
+      for (const candidate of widthCandidates) {
+        const n = parse(candidate)
+        if (n > maxBreadth) {
+          maxBreadth = n
+        }
+      }
+
+      for (const candidate of heightCandidates) {
+        const n = parse(candidate)
+        if (n > maxHeight) {
+          maxHeight = n
+        }
+      }
+    }
+
+    return {
+      length: maxLength || defaultLength,
+      breadth: maxBreadth || defaultBreadth,
+      height: maxHeight || defaultHeight,
+    }
   }
 
   /**

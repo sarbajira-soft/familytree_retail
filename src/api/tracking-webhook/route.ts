@@ -35,12 +35,25 @@ function normalizeShiprocketStatus(body: any): string {
 
   // Handle known numeric status codes from Shiprocket tracking
   if (/^\d+$/.test(raw)) {
-    // 42 is used by Shiprocket for "PICKED UP"
-    if (raw === "42") {
-      return "picked_up"
+    // Common Shiprocket numeric shipment status codes.
+    // See admin status route for details.
+    switch (raw) {
+      case "7":
+        return "delivered"
+      case "17":
+        return "out_for_delivery"
+      case "18":
+      case "38":
+        return "in_transit"
+      case "19":
+        return "pickup_scheduled"
+      case "21":
+        return "undelivered"
+      case "42":
+        return "picked_up"
+      default:
+        return "unknown"
     }
-
-    return "unknown"
   }
 
   if (raw.includes("picked up") || raw.includes("pickup done")) {
@@ -53,6 +66,14 @@ function normalizeShiprocketStatus(body: any): string {
 
   if (raw.includes("transit") || raw.includes("shipped")) {
     return "in_transit"
+  }
+
+  if (raw.includes("out for delivery") || raw.includes("ofd")) {
+    return "out_for_delivery"
+  }
+
+  if (raw.includes("undelivered") || raw.includes("un-delivered")) {
+    return "undelivered"
   }
 
   if (raw.includes("delivered")) {

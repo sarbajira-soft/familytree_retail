@@ -1,5 +1,4 @@
 import { useState } from "react"
-import type { FormEvent } from "react"
 import { defineWidgetConfig } from "@medusajs/admin-sdk"
 import type { AdminOrder, DetailWidgetProps } from "@medusajs/framework/types"
 import { Button, Container, Heading, Text } from "@medusajs/ui"
@@ -15,27 +14,6 @@ const OrderShiprocketWidget = ({ data: order }: DetailWidgetProps<AdminOrder>) =
 
   const [retryOrderLoading, setRetryOrderLoading] = useState(false)
   const [retryAwbLoading, setRetryAwbLoading] = useState(false)
-  const [weightKg, setWeightKg] = useState<string>(
-    meta.shiprocket_weight_kg !== undefined && meta.shiprocket_weight_kg !== null
-      ? String(meta.shiprocket_weight_kg)
-      : ""
-  )
-  const [lengthCm, setLengthCm] = useState<string>(
-    meta.shiprocket_length_cm !== undefined && meta.shiprocket_length_cm !== null
-      ? String(meta.shiprocket_length_cm)
-      : ""
-  )
-  const [breadthCm, setBreadthCm] = useState<string>(
-    meta.shiprocket_breadth_cm !== undefined && meta.shiprocket_breadth_cm !== null
-      ? String(meta.shiprocket_breadth_cm)
-      : ""
-  )
-  const [heightCm, setHeightCm] = useState<string>(
-    meta.shiprocket_height_cm !== undefined && meta.shiprocket_height_cm !== null
-      ? String(meta.shiprocket_height_cm)
-      : ""
-  )
-  const [weightDimsSaving, setWeightDimsSaving] = useState(false)
   const [labelLoading, setLabelLoading] = useState(false)
   const [invoiceLoading, setInvoiceLoading] = useState(false)
   const [pickupLoading, setPickupLoading] = useState(false)
@@ -89,57 +67,6 @@ const OrderShiprocketWidget = ({ data: order }: DetailWidgetProps<AdminOrder>) =
       console.error("Shiprocket AWB retry error", e)
     } finally {
       setRetryAwbLoading(false)
-    }
-  }
-
-  const handleSaveWeightDims = async (e: FormEvent) => {
-    e.preventDefault()
-    if (hasAwb) {
-      return
-    }
-    setWeightDimsSaving(true)
-    try {
-      const body: Record<string, any> = {}
-
-      if (weightKg !== "") {
-        body.weight_kg = Number(weightKg)
-      }
-      if (lengthCm !== "") {
-        body.length_cm = Number(lengthCm)
-      }
-      if (breadthCm !== "") {
-        body.breadth_cm = Number(breadthCm)
-      }
-      if (heightCm !== "") {
-        body.height_cm = Number(heightCm)
-      }
-
-      const res = await fetch(
-        `/admin/orders/${order.id}/shiprocket/weight-dimensions`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(body),
-        }
-      )
-
-      if (!res.ok) {
-        console.error("Shiprocket weight/dimensions update failed", await res.text())
-      } else {
-        const data = (await res.json().catch(() => null)) as
-          | { metadata?: Record<string, any> }
-          | null
-        if (data?.metadata) {
-          setMeta((prev) => ({ ...prev, ...data.metadata }))
-        }
-      }
-      // No full page reload; rely on admin's data refresh or manual reload
-    } catch (err) {
-      console.error("Shiprocket weight/dimensions update error", err)
-    } finally {
-      setWeightDimsSaving(false)
     }
   }
 
@@ -602,63 +529,35 @@ const OrderShiprocketWidget = ({ data: order }: DetailWidgetProps<AdminOrder>) =
             </Button>
           )}
         </div>
-        <form className="space-y-2 pt-4" onSubmit={handleSaveWeightDims}>
-          <Text weight="plus">Weight &amp; Dimensions (overrides)</Text>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="flex flex-col text-xs">
+        <div className="space-y-2 pt-4">
+          <Text weight="plus">Weight &amp; Dimensions</Text>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="flex flex-col">
               <span>Weight (kg)</span>
-              <input
-                type="number"
-                step="0.01"
-                value={weightKg}
-                onChange={(e) => setWeightKg(e.target.value)}
-                disabled={hasAwb}
-                className="border rounded px-2 py-1"
-              />
-            </label>
-            <label className="flex flex-col text-xs">
+              <span className="border rounded px-2 py-1 bg-ui-bg-subtle">
+                {meta.shiprocket_weight_kg ?? "-"}
+              </span>
+            </div>
+            <div className="flex flex-col">
               <span>Length (cm)</span>
-              <input
-                type="number"
-                step="0.1"
-                value={lengthCm}
-                onChange={(e) => setLengthCm(e.target.value)}
-                disabled={hasAwb}
-                className="border rounded px-2 py-1"
-              />
-            </label>
-            <label className="flex flex-col text-xs">
+              <span className="border rounded px-2 py-1 bg-ui-bg-subtle">
+                {meta.shiprocket_length_cm ?? "-"}
+              </span>
+            </div>
+            <div className="flex flex-col">
               <span>Breadth (cm)</span>
-              <input
-                type="number"
-                step="0.1"
-                value={breadthCm}
-                onChange={(e) => setBreadthCm(e.target.value)}
-                disabled={hasAwb}
-                className="border rounded px-2 py-1"
-              />
-            </label>
-            <label className="flex flex-col text-xs">
+              <span className="border rounded px-2 py-1 bg-ui-bg-subtle">
+                {meta.shiprocket_breadth_cm ?? "-"}
+              </span>
+            </div>
+            <div className="flex flex-col">
               <span>Height (cm)</span>
-              <input
-                type="number"
-                step="0.1"
-                value={heightCm}
-                onChange={(e) => setHeightCm(e.target.value)}
-                disabled={hasAwb}
-                className="border rounded px-2 py-1"
-              />
-            </label>
+              <span className="border rounded px-2 py-1 bg-ui-bg-subtle">
+                {meta.shiprocket_height_cm ?? "-"}
+              </span>
+            </div>
           </div>
-          <Button
-            type="submit"
-            size="small"
-            variant="primary"
-            disabled={weightDimsSaving || hasAwb}
-          >
-            {weightDimsSaving ? "Saving..." : "Save Weight & Dimensions"}
-          </Button>
-        </form>
+        </div>
       </div>
     </Container>
   )
