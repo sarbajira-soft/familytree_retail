@@ -215,7 +215,7 @@ export default async function shiprocketCartUpdated({
 
     if ((
       !hasMetaWeight ||
-      (metaWeightIsDefault && realWeightKg > 0 && Math.abs(weightKg - metaWeightNum) > 1e-6)
+      (metaWeightIsDefault && realWeightKg > 0 && Math.abs((weightKg ?? 0) - metaWeightNum) > 1e-6)
     ) && weightKg && Number.isFinite(weightKg) && weightKg > 0) {
       newMetadata.weight_kg = weightKg
     }

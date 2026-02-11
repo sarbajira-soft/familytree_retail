@@ -90,7 +90,7 @@ export default class S3NoACLFileService extends AbstractFileProviderService {
       
       return { url, key }
     } catch (error) {
-      this.logger_.error(`Error uploading file to S3: ${error.message}`, { error })
+      this.logger_.error(`Error uploading file to S3: ${(error as any)?.message || String(error)}`)
       throw error
     }
   }
@@ -105,7 +105,7 @@ export default class S3NoACLFileService extends AbstractFileProviderService {
       await this.client_.send(command)
       this.logger_.info(`File deleted successfully: ${fileData.fileKey}`)
     } catch (error) {
-      this.logger_.error(`Error deleting file from S3: ${error.message}`, { error })
+      this.logger_.error(`Error deleting file from S3: ${(error as any)?.message || String(error)}`)
       throw error
     }
   }
@@ -120,7 +120,7 @@ export default class S3NoACLFileService extends AbstractFileProviderService {
       const url = await getSignedUrl(this.client_, command, { expiresIn: 3600 })
       return url
     } catch (error) {
-      this.logger_.error(`Error generating presigned URL: ${error.message}`, { error })
+      this.logger_.error(`Error generating presigned URL: ${(error as any)?.message || String(error)}`)
       throw error
     }
   }
@@ -135,7 +135,7 @@ export default class S3NoACLFileService extends AbstractFileProviderService {
       const response = await this.client_.send(command)
       return response.Body as stream.Readable
     } catch (error) {
-      this.logger_.error(`Error getting download stream: ${error.message}`, { error })
+      this.logger_.error(`Error getting download stream: ${(error as any)?.message || String(error)}`)
       throw error
     }
   }

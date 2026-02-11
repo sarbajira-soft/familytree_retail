@@ -291,11 +291,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     authorized = await paymentModuleService.authorizePaymentSession(session.id, {})
   } catch (e: any) {
     // authorization can fail if still pending; caller can poll again.
-    logger.warn?.("Razorpay verify: authorizePaymentSession failed", {
-      paymentCollectionId,
-      sessionId: session.id,
-      message: e?.message,
-    })
+    logger.warn?.(
+      `Razorpay verify: authorizePaymentSession failed (paymentCollectionId=${paymentCollectionId}, sessionId=${session.id}, error=${
+        e?.message || "unknown"
+      })`
+    )
   }
 
   const refreshedSessions = await paymentModuleService.listPaymentSessions({
