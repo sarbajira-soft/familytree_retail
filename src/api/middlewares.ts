@@ -49,5 +49,17 @@ export default defineMiddlewares({
       matcher: "/admin/customer-sync",
       middlewares: [customerSyncAuth],
     },
+    {
+      matcher: "/admin/customer-sync/customer/*",
+      middlewares: [customerSyncAuth],
+    },
+    {
+      matcher: "/admin/customer-sync/orders",
+      middlewares: [customerSyncAuth],
+    },
+    {
+      matcher: "/admin/customer-sync/orders/*",
+      middlewares: [customerSyncAuth],
+    },
   ],
 })
