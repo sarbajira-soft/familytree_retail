@@ -53,6 +53,31 @@ export async function POST(req: MedusaRequest<RequestBody>, res: MedusaResponse<
       metadata,
     } = (req.body || {}) as RequestBody
 
+    if (type === "delete_customer") {
+      if (!customer_id) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "customer_id is required")
+      }
+
+      const id = String(customer_id || "").trim()
+      if (!id) {
+        throw new MedusaError(MedusaError.Types.INVALID_DATA, "customer_id is required")
+      }
+
+      if (typeof customerModuleService.deleteCustomers === "function") {
+        await customerModuleService.deleteCustomers([id])
+      } else if (typeof customerModuleService.deleteCustomer === "function") {
+        await customerModuleService.deleteCustomer(id)
+      } else {
+        throw new MedusaError(
+          MedusaError.Types.NOT_ALLOWED,
+          "Customer deletion is not supported by the customer module"
+        )
+      }
+
+      res.status(200).json({ success: true, customer_id: id })
+      return
+    }
+
     if (type === "password") {
       if (!email || !password) {
         throw new MedusaError(MedusaError.Types.INVALID_DATA, "email and password are required")
