@@ -17,6 +17,9 @@ module.exports = defineConfig({
 
   modules: [
     {
+      resolve: "./src/modules/payment-orchestration",
+    },
+    {
       resolve: "@medusajs/file",
       options: {
         providers: [

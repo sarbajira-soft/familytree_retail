@@ -94,7 +94,48 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
    * but this function is defensive in case BigNumber-like values are used.
    */
   protected toMinorUnit(amount: any, _currencyCode: string): number {
-    const numeric = typeof amount === "string" ? Number(amount) : (amount as number)
+    const resolveAmount = (value: any): number => {
+      if (typeof value === "number") {
+        return value
+      }
+
+      if (typeof value === "string") {
+        return Number(value)
+      }
+
+      if (value && typeof value === "object") {
+        const candidates = [
+          value.numeric,
+          value.raw,
+          value.value,
+          value.amount,
+        ]
+
+        for (const candidate of candidates) {
+          if (typeof candidate === "number") {
+            return candidate
+          }
+
+          if (typeof candidate === "string") {
+            const parsed = Number(candidate)
+            if (Number.isFinite(parsed)) {
+              return parsed
+            }
+          }
+        }
+
+        if (typeof value.toString === "function") {
+          const parsed = Number(value.toString())
+          if (Number.isFinite(parsed)) {
+            return parsed
+          }
+        }
+      }
+
+      return Number.NaN
+    }
+
+    const numeric = resolveAmount(amount)
 
     if (!Number.isFinite(numeric)) {
       throw new MedusaError(
@@ -103,9 +144,28 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
       )
     }
 
-    // Treat incoming amount as major units (e.g. rupees) and
-    // convert to minor units (e.g. paise) for Razorpay.
-    return Math.round(numeric * 100)
+    const currencyCode = (_currencyCode || "").toString().toUpperCase()
+    const zeroDecimalCurrencies = new Set([
+      "BIF",
+      "CLP",
+      "DJF",
+      "GNF",
+      "JPY",
+      "KMF",
+      "KRW",
+      "MGA",
+      "PYG",
+      "RWF",
+      "UGX",
+      "VND",
+      "VUV",
+      "XAF",
+      "XOF",
+      "XPF",
+    ])
+
+    const factor = zeroDecimalCurrencies.has(currencyCode) ? 1 : 100
+    return Math.round(numeric * factor)
   }
 
   /**
@@ -117,6 +177,17 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
     const { amount, currency_code, data, context } = input
 
     const sessionId = (data?.session_id as string) || (context?.idempotency_key as string) || ""
+    const cartId =
+      (data?.cart_id as string) ||
+      ((context as any)?.cart_id as string) ||
+      ((context as any)?.resource_id as string) ||
+      ""
+    const paymentCollectionId =
+      (data?.payment_collection_id as string) ||
+      ((context as any)?.payment_collection_id as string) ||
+      ""
+    const attemptId =
+      (data?.attempt_id as string) || ((context as any)?.attempt_id as string) || ""
     const minorAmount = this.toMinorUnit(amount, currency_code)
 
     try {
@@ -131,6 +202,9 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
           payment_session_id: sessionId,
           // Backward compatibility with older payloads.
           session_id: sessionId,
+          cart_id: cartId,
+          payment_collection_id: paymentCollectionId,
+          attempt_id: attemptId,
         },
       })
 
@@ -142,6 +216,9 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
           amount: order.amount,
           currency: order.currency,
           session_id: sessionId,
+          cart_id: cartId || undefined,
+          payment_collection_id: paymentCollectionId || undefined,
+          attempt_id: attemptId || undefined,
           razorpay_key_id: this.options_.keyId,
         },
         status: PaymentSessionStatus.PENDING,
@@ -182,38 +259,31 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
         ? paymentsResponse.items
         : []
 
-      // Razorpay payment status can be "authorized" (not yet captured)
-      // or "captured" when payment_capture=1 or when captured later.
-      // Prefer captured if available, otherwise accept authorized.
+      // Payment is considered successful only after capture.
       const capturedPayment = items.find((p: any) => p.status === "captured")
       const authorizedPayment = items.find((p: any) => p.status === "authorized")
-      const successfulPayment = capturedPayment || authorizedPayment
 
-      if (!successfulPayment) {
-        // No captured payment yet; leave session pending so that
-        // webhooks can still move it to SUCCESSFUL when they arrive.
+      if (!capturedPayment) {
         return {
           data: {
             ...data,
-            latest_status: "pending",
+            latest_status: authorizedPayment ? "authorized" : "pending",
+            capture_state: authorizedPayment ? "pending_capture" : "pending",
+            razorpay_payment_id: authorizedPayment?.id || data.razorpay_payment_id,
           },
           status: PaymentSessionStatus.PENDING,
         }
       }
 
-      const razorpayStatus = (successfulPayment.status as string) || ""
-
       return {
         data: {
           ...data,
           razorpay_order_id: orderId,
-          razorpay_payment_id: successfulPayment.id,
-          latest_status: razorpayStatus,
+          razorpay_payment_id: capturedPayment.id,
+          latest_status: "captured",
+          capture_state: "captured",
         },
-        status:
-          razorpayStatus === "captured"
-            ? PaymentSessionStatus.CAPTURED
-            : PaymentSessionStatus.AUTHORIZED,
+        status: PaymentSessionStatus.CAPTURED,
       }
     } catch (e: any) {
       this.logger_?.error?.("Razorpay authorizePayment verification failed", e)
@@ -234,8 +304,59 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
    * already have ensured the payment is captured, so we only propagate data.
    */
   async capturePayment(input: CapturePaymentInput): Promise<CapturePaymentOutput> {
+    const data = (input.data || {}) as Record<string, unknown>
+    const paymentId = (data.razorpay_payment_id as string) || ""
+
+    if (!paymentId) {
+      return {
+        data,
+      }
+    }
+
+    try {
+      const currentPayment = (await this.client_.payments.fetch(paymentId)) as any
+
+      if (currentPayment?.status === "captured") {
+        return {
+          data: {
+            ...data,
+            latest_status: "captured",
+            capture_state: "captured",
+          },
+        }
+      }
+
+      if (currentPayment?.status === "authorized") {
+        // Auto capture should normally handle this. This fallback keeps the
+        // backend safe if dashboard settings are changed inadvertently.
+        const capturedPayment = (await (this.client_.payments as any).capture(paymentId, {
+          amount:
+            typeof currentPayment.amount === "number" ? currentPayment.amount : undefined,
+          currency:
+            (currentPayment.currency as string | undefined) ||
+            (data.currency as string | undefined) ||
+            undefined,
+        })) as any
+
+        return {
+          data: {
+            ...data,
+            razorpay_payment_id: capturedPayment.id,
+            latest_status: capturedPayment.status || "captured",
+            capture_state: "captured",
+          },
+        }
+      }
+    } catch (e: any) {
+      this.logger_?.warn?.(
+        `Razorpay capturePayment fallback failed for payment ${paymentId}: ${
+          e?.message || "unknown error"
+        }`
+      )
+    }
+
     return {
-      data: input.data || {},
+      data,
     }
   }
 
@@ -296,6 +417,7 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
           : []
 
         const captured = items.find((p: any) => p.status === "captured")
+        const authorized = items.find((p: any) => p.status === "authorized")
         const latest = items[0] as any | undefined
 
         if (captured) {
@@ -306,6 +428,19 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
               razorpay_order_id: orderId,
               razorpay_payment_id: captured.id,
               latest_status: captured.status,
+            },
+          } as unknown as GetPaymentStatusOutput
+        }
+
+        if (authorized) {
+          return {
+            status: PaymentSessionStatus.PENDING,
+            data: {
+              ...data,
+              razorpay_order_id: orderId,
+              razorpay_payment_id: authorized.id,
+              latest_status: authorized.status,
+              capture_state: "pending_capture",
             },
           } as unknown as GetPaymentStatusOutput
         }
@@ -457,21 +592,27 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
 
     try {
       const amountMinor = this.toMinorUnit(input.amount, "INR")
+      let refund: any
 
       // Prefer refunds API if available, otherwise fall back to payments.refund
       if (this.client_.refunds?.create) {
-        await this.client_.refunds.create({
+        refund = await this.client_.refunds.create({
           payment_id: paymentId,
           amount: amountMinor,
         })
       } else {
-        await this.client_.payments.refund(paymentId, {
+        refund = await this.client_.payments.refund(paymentId, {
           amount: amountMinor,
         })
       }
 
       return {
-        data,
+        data: {
+          ...data,
+          razorpay_refund_id: refund?.id || data.razorpay_refund_id,
+          latest_refund_id: refund?.id || data.latest_refund_id,
+          latest_refund_status: refund?.status || "processed",
+        },
       } as unknown as RefundPaymentOutput
     } catch (e: any) {
       this.logger_?.error?.("Razorpay refundPayment failed", e)
@@ -536,7 +677,7 @@ class RazorpayProviderService extends AbstractPaymentProvider<RazorpayProviderOp
       case "captured":
         return PaymentSessionStatus.CAPTURED
       case "authorized":
-        return PaymentSessionStatus.AUTHORIZED
+        return PaymentSessionStatus.PENDING
       case "failed":
         return PaymentSessionStatus.ERROR
       case "refunded":
