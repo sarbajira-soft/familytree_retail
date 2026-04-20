@@ -64,7 +64,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse<ResponseBody>)
       const needle = payment.toLowerCase()
       candidates = candidates.filter((o: any) => {
         const pcs = Array.isArray(o?.payment_collections) ? o.payment_collections : []
-        const paymentsRaw = []
+        const paymentsRaw: any[] = []
         for (const pc of pcs) {
           const inner = (pc as any)?.payments
           if (Array.isArray(inner)) paymentsRaw.push(...inner)

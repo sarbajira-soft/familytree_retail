@@ -4,7 +4,7 @@ import { createWorkflow, WorkflowResponse } from "@medusajs/framework/workflows-
 import { setAuthAppMetadataStep } from "@medusajs/medusa/core-flows"
 
 type RequestBody = {
-  type?: "password"
+  type?: "password" | "delete_customer"
   customer_id?: string
   previous_email?: string
   email?: string
