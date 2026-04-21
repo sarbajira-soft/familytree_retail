@@ -215,10 +215,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse<SsoResponse>)
       throw new MedusaError(MedusaError.Types.INVALID_DATA, "Authenticated user has no email")
     }
 
-    const customers = await customerModuleService.listCustomers(
-      { email, has_account: true },
-      { take: 1 }
-    )
+    const customers = await customerModuleService.listCustomers({ email }, { take: 1 })
 
     const existingCustomer = customers?.[0]
 
@@ -235,11 +232,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse<SsoResponse>)
 
       if (
         (first_name && first_name !== existingCustomer.first_name) ||
-        (last_name && last_name !== existingCustomer.last_name)
+        (last_name && last_name !== existingCustomer.last_name) ||
+        existingCustomer.has_account !== true
       ) {
         await customerModuleService.updateCustomers(existingCustomer.id, {
           ...(first_name ? { first_name } : {}),
           ...(last_name ? { last_name } : {}),
+          has_account: true,
         })
       }
 

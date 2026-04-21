@@ -946,6 +946,49 @@ export class ShiprocketService {
     }
   }
 
+  async cancelOrders(
+    orderIds: number[]
+  ): Promise<{
+    success: boolean
+    error_code?: string
+    error_message?: string
+  } | null> {
+    if (!orderIds.length) {
+      return {
+        success: false,
+        error_code: "NO_ORDER_IDS",
+        error_message: "No Shiprocket order ids provided for cancellation",
+      }
+    }
+
+    const client = await this.getClient()
+
+    try {
+      await this.withRetry(
+        () =>
+          client.post("/v1/external/orders/cancel", {
+            ids: orderIds,
+          }),
+        "cancel-orders"
+      )
+
+      return {
+        success: true,
+      }
+    } catch (e: any) {
+      const errPayload = e?.response?.data || e
+      this.logger.error?.("Shiprocket order cancellation failed", errPayload)
+      return {
+        success: false,
+        error_code: "SHIPROCKET_API_ERROR",
+        error_message:
+          typeof errPayload === "string"
+            ? errPayload
+            : JSON.stringify(errPayload),
+      }
+    }
+  }
+
   /**
    * Track shipment by AWB code.
    */

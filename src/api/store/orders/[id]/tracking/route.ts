@@ -1,19 +1,17 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import type { Logger, OrderDTO } from "@medusajs/framework/types"
-import { Modules } from "@medusajs/framework/utils"
+import type { Logger } from "@medusajs/framework/types"
 
 import { ShiprocketService } from "../../../../../services/shiprocket"
+import { getOwnedOrder } from "../../retail-helpers"
 
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   const { id } = req.params
 
   const logger: Logger = req.scope.resolve("logger")
-  const orderModuleService = req.scope.resolve(Modules.ORDER)
-
-  let order: OrderDTO | undefined
+  let order: any
 
   try {
-    order = await orderModuleService.retrieveOrder(id)
+    order = await getOwnedOrder(req, id)
   } catch (e: any) {
     logger.error?.("Shiprocket tracking: failed to retrieve order", e)
     return res.status(404).json({
